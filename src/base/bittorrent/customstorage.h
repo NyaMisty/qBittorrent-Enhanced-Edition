@@ -34,89 +34,47 @@
 
 #include <QString>
 
-#if (LIBTORRENT_VERSION_NUM >= 20000)
-#include <libtorrent/disk_interface.hpp>
-#include <libtorrent/file_storage.hpp>
-#include <libtorrent/io_context.hpp>
-
-#include <QHash>
-
-#include "ltqhash.h"
-#else
 #include <libtorrent/storage.hpp>
-#endif
+#include "libtorrent/storage_defs.hpp"
+#include "libtorrent/file_pool.hpp"
+#include "libtorrent/file_storage.hpp"
 
-#if (LIBTORRENT_VERSION_NUM >= 20000)
-std::unique_ptr<lt::disk_interface> customDiskIOConstructor(
-        lt::io_context &ioContext, lt::settings_interface const &settings, lt::counters &counters);
-
-class CustomDiskIOThread final : public lt::disk_interface
-{
-public:
-    explicit CustomDiskIOThread(std::unique_ptr<libtorrent::disk_interface> nativeDiskIOThread);
-
-    lt::storage_holder new_torrent(const lt::storage_params &storageParams, const std::shared_ptr<void> &torrent) override;
-    void remove_torrent(lt::storage_index_t storageIndex) override;
-    void async_read(lt::storage_index_t storageIndex, const lt::peer_request &peerRequest
-                    , std::function<void (lt::disk_buffer_holder, const lt::storage_error &)> handler
-                    , lt::disk_job_flags_t flags) override;
-    bool async_write(lt::storage_index_t storageIndex, const lt::peer_request &peerRequest
-                     , const char *buf, std::shared_ptr<lt::disk_observer> diskObserver
-                     , std::function<void (const lt::storage_error &)> handler, lt::disk_job_flags_t flags) override;
-    void async_hash(lt::storage_index_t storageIndex, lt::piece_index_t piece, lt::span<lt::sha256_hash> hash, lt::disk_job_flags_t flags
-                    , std::function<void (lt::piece_index_t, const lt::sha1_hash &, const lt::storage_error &)> handler) override;
-    void async_hash2(lt::storage_index_t storage, lt::piece_index_t piece, int offset, lt::disk_job_flags_t flags
-                     , std::function<void (lt::piece_index_t, const lt::sha256_hash &, const lt::storage_error &)> handler) override;
-    void async_move_storage(lt::storage_index_t storage, std::string path, lt::move_flags_t flags
-                            , std::function<void (lt::status_t, const std::string &, const lt::storage_error &)> handler) override;
-    void async_release_files(lt::storage_index_t storage, std::function<void ()> handler) override;
-    void async_check_files(lt::storage_index_t storage, const lt::add_torrent_params *resume_data
-                           , lt::aux::vector<std::string, lt::file_index_t> links
-                           , std::function<void (lt::status_t, const lt::storage_error &)> handler) override;
-    void async_stop_torrent(lt::storage_index_t storage, std::function<void ()> handler) override;
-    void async_rename_file(lt::storage_index_t storage, lt::file_index_t index, std::string name
-                           , std::function<void (const std::string &, lt::file_index_t, const lt::storage_error &)> handler) override;
-    void async_delete_files(lt::storage_index_t storage, lt::remove_flags_t options, std::function<void (const lt::storage_error &)> handler) override;
-    void async_set_file_priority(lt::storage_index_t storage, lt::aux::vector<lt::download_priority_t, lt::file_index_t> priorities
-                                 , std::function<void (const lt::storage_error &, lt::aux::vector<lt::download_priority_t, lt::file_index_t>)> handler) override;
-    void async_clear_piece(lt::storage_index_t storage, lt::piece_index_t index, std::function<void (lt::piece_index_t)> handler) override;
-    void update_stats_counters(lt::counters &counters) const override;
-    std::vector<lt::open_file_state> get_status(lt::storage_index_t index) const override;
-    void abort(bool wait) override;
-    void submit_jobs() override;
-    void settings_updated() override;
-
-private:
-    void handleCompleteFiles(libtorrent::storage_index_t storage, const QString &savePath);
-
-    std::unique_ptr<lt::disk_interface> m_nativeDiskIO;
-
-    struct StorageData
-    {
-        QString savePath;
-        lt::file_storage files;
-        lt::aux::vector<lt::download_priority_t, lt::file_index_t> filePriorities;
-    };
-    QHash<lt::storage_index_t, StorageData> m_storageData;
-};
-
-#else
 
 lt::storage_interface *customStorageConstructor(const lt::storage_params &params, lt::file_pool &pool);
 
-class CustomStorage final : public lt::default_storage
+class CustomStorage final : public lt::storage_interface
 {
 public:
-    explicit CustomStorage(const lt::storage_params &params, lt::file_pool &filePool);
+    explicit CustomStorage(lt::storage_params const& params, lt::file_pool& pool);
+    ~CustomStorage();
+    void initialize(lt::storage_error&) override;
+    bool has_any_file(lt::storage_error&) override { return false; }
+    void set_file_priority(lt::aux::vector<lt::download_priority_t, lt::file_index_t>&
+        , lt::storage_error&) override {}
+    void rename_file(lt::file_index_t, std::string const&, lt::storage_error&) override
+    { assert(false); }
+    lt::status_t move_storage(std::string const&
+        , lt::move_flags_t, lt::storage_error&) override { return lt::status_t::no_error; }
+    bool verify_resume_data(lt::add_torrent_params const&
+        , lt::aux::vector<std::string, lt::file_index_t> const&
+        , lt::storage_error&) override
+    { return false; }
+    void release_files(lt::storage_error&) override {
+        // make sure we don't have the files open
+		m_pool.release(storage_index());
+    }
+    void delete_files(lt::remove_flags_t, lt::storage_error&) override {
+        m_pool.release(storage_index());
+    }
 
-    bool verify_resume_data(const lt::add_torrent_params &rd, const lt::aux::vector<std::string, lt::file_index_t> &links, lt::storage_error &ec) override;
-    void set_file_priority(lt::aux::vector<lt::download_priority_t, lt::file_index_t> &priorities, lt::storage_error &ec) override;
-    lt::status_t move_storage(const std::string &savePath, lt::move_flags_t flags, lt::storage_error &ec) override;
+    int readv(lt::span<lt::iovec_t const> bufs, lt::piece_index_t piece
+        , int offset, lt::open_mode_t, lt::storage_error&) override;
+
+    int writev(lt::span<lt::iovec_t const> bufs
+        , lt::piece_index_t const piece, int offset, lt::open_mode_t, lt::storage_error&) override;
 
 private:
-    void handleCompleteFiles(const QString &savePath);
-
-    lt::aux::vector<lt::download_priority_t, lt::file_index_t> m_filePriorities;
-    QString m_savePath;
+    std::string m_save_path;
+    lt::file_pool& m_pool;
+    lt::file_storage m_onefile;
 };
-#endif
