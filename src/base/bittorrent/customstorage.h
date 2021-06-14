@@ -61,9 +61,11 @@ public:
     { return false; }
     void release_files(lt::storage_error&) override {
         // make sure we don't have the files open
+        lt::file_handle defer_delete = std::move(m_fh);
 		m_pool.release(storage_index());
     }
     void delete_files(lt::remove_flags_t, lt::storage_error&) override {
+        lt::file_handle defer_delete = std::move(m_fh);
         m_pool.release(storage_index());
     }
 
@@ -77,4 +79,5 @@ private:
     std::string m_save_path;
     lt::file_pool& m_pool;
     lt::file_storage m_onefile;
+    lt::file_handle m_fh;
 };

@@ -66,6 +66,14 @@ void CustomStorage::initialize(lt::storage_error& ec) {
 	m_onefile.set_num_pieces(files().num_pieces());
 	m_onefile.set_name(files().name());
 	m_onefile.add_file(files().name(), files().total_size());
+	lt::error_code e;
+	m_fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | lt::open_mode::random_access, e);
+	if (e) {
+		ec.ec = e;
+		ec.file(lt::file_index_t{0});
+		ec.operation = lt::operation_t::file_open;
+		return;
+	}
 }
 int CustomStorage::readv(lt::span<lt::iovec_t const> bufs, lt::piece_index_t piece
         , int offset, lt::open_mode_t, lt::storage_error&)
@@ -99,15 +107,8 @@ int CustomStorage::writev(lt::span<lt::iovec_t const> bufs
 	// }
 	// return ret;
 	lt::error_code e;
-	lt::file_handle fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | lt::open_mode::random_access, e);
-	if (e) {
-		ec.ec = e;
-		ec.file(lt::file_index_t{0});
-		ec.operation = lt::operation_t::file_open;
-		return -1;
-	}
 	size_t pieceoff = files().piece_length() * int(piece);
-	int ret = int(fh->writev(pieceoff + offset, bufs, e, flags));
+	int ret = int(m_fh->writev(pieceoff + offset, bufs, e, flags));
 	if (e) {
 		ec.ec = e;
 		ec.file(lt::file_index_t{0});
