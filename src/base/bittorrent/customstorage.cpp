@@ -71,10 +71,24 @@ void CustomStorage::initialize(lt::storage_error& ec) {
 	if (e) {
 		ec.ec = e;
 		ec.file(lt::file_index_t{0});
-		ec.operation = lt::operation_t::file_open;
+		ec.operation = lt::operation_t::file;
 		return;
 	}
+	LogMsg(QString("Successfully opened file handle"), Log::INFO);
 }
+
+void CustomStorage::release_files(lt::storage_error&) {
+	// make sure we don't have the files open
+	LogMsg(QString("Released file handle"), Log::INFO);
+	lt::file_handle defer_delete = std::move(m_fh);
+	m_pool.release(storage_index());
+}
+void CustomStorage::delete_files(lt::remove_flags_t, lt::storage_error&) {
+	LogMsg(QString("Released file handle"), Log::INFO);
+	lt::file_handle defer_delete = std::move(m_fh);
+	m_pool.release(storage_index());
+}
+
 int CustomStorage::readv(lt::span<lt::iovec_t const> bufs, lt::piece_index_t piece
         , int offset, lt::open_mode_t, lt::storage_error&)
 {
@@ -107,8 +121,15 @@ int CustomStorage::writev(lt::span<lt::iovec_t const> bufs
 	// }
 	// return ret;
 	lt::error_code e;
+	if (e) {
+		ec.ec = e;
+		ec.file(lt::file_index_t{0});
+		ec.operation = lt::operation_t::file_open;
+		return -1;
+	}
+	lt::file_handle fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | lt::open_mode::random_access, e);
 	size_t pieceoff = files().piece_length() * int(piece);
-	int ret = int(m_fh->writev(pieceoff + offset, bufs, e, flags));
+	int ret = int(fh->writev(pieceoff + offset, bufs, e, flags));
 	if (e) {
 		ec.ec = e;
 		ec.file(lt::file_index_t{0});

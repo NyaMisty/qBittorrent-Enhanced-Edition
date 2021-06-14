@@ -59,15 +59,8 @@ public:
         , lt::aux::vector<std::string, lt::file_index_t> const&
         , lt::storage_error&) override
     { return false; }
-    void release_files(lt::storage_error&) override {
-        // make sure we don't have the files open
-        lt::file_handle defer_delete = std::move(m_fh);
-		m_pool.release(storage_index());
-    }
-    void delete_files(lt::remove_flags_t, lt::storage_error&) override {
-        lt::file_handle defer_delete = std::move(m_fh);
-        m_pool.release(storage_index());
-    }
+    void release_files(lt::storage_error&) override;
+    void delete_files(lt::remove_flags_t, lt::storage_error&) override;
 
     int readv(lt::span<lt::iovec_t const> bufs, lt::piece_index_t piece
         , int offset, lt::open_mode_t, lt::storage_error&) override;
