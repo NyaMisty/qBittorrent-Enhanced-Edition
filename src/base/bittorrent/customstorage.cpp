@@ -121,13 +121,13 @@ int CustomStorage::writev(lt::span<lt::iovec_t const> bufs
 	// }
 	// return ret;
 	lt::error_code e;
+	lt::file_handle fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | lt::open_mode::random_access, e);
 	if (e) {
 		ec.ec = e;
 		ec.file(lt::file_index_t{0});
 		ec.operation = lt::operation_t::file_open;
 		return -1;
 	}
-	lt::file_handle fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | lt::open_mode::random_access, e);
 	size_t pieceoff = files().piece_length() * int(piece);
 	int ret = int(fh->writev(pieceoff + offset, bufs, e, flags));
 	if (e) {
