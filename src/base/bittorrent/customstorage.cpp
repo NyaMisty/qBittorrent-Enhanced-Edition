@@ -37,7 +37,9 @@
 #include "base/utils/fs.h"
 #include "base/logger.h"
 #include "common.h"
-#include "libtorrent/aux_/path.hpp"
+#include <libtorrent/aux_/path.hpp>
+#include <libtorrent/operations.hpp>
+
 
 
 CustomStorage::CustomStorage(lt::storage_params const& params, lt::file_pool& pool) : lt::storage_interface(params.files), m_pool(pool) {
@@ -99,11 +101,17 @@ int CustomStorage::writev(lt::span<lt::iovec_t const> bufs
 	lt::error_code e;
 	lt::file_handle fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | lt::open_mode::random_access, e);
 	if (e) {
+		ec.ec = e;
+		ec.file(lt::file_index_t{0});
+		ec.operation = lt::operation_t::file_open;
 		return -1;
 	}
 	size_t pieceoff = files().piece_length() * int(piece);
 	int ret = int(fh->writev(pieceoff + offset, bufs, e, flags));
 	if (e) {
+		ec.ec = e;
+		ec.file(lt::file_index_t{0});
+		ec.operation = lt::operation_t::file_write;
 		return -1;
 	}
 	return ret;
