@@ -18,22 +18,14 @@ export QT_DEVICE="${QT_DEVICE}"
 # match qt version prefix. E.g 5 --> 5.15.2, 5.12 --> 5.12.10
 export QT_VER_PREFIX="5"
 export LIBTORRENT_BRANCH="RC_1_2"
-export CROSS_ROOT="${CROSS_ROOT:-/cross_root}"
 
-apk add gcc \
-  g++ \
-  make \
-  file \
-  perl \
-  autoconf \
-  automake \
-  libtool \
-  tar \
-  jq \
-  pkgconfig \
-  linux-headers \
-  zip \
-  xz
+
+BUILDOP="${1}"
+SELF_DIR="$(dirname "$(readlink -f "${0}")")"
+export CROSS_ROOT="${CROSS_ROOT:-/cross_root}"
+export PATH="${CROSS_ROOT}/bin:${PATH}"
+export CROSS_PREFIX="${CROSS_ROOT}/${CROSS_HOST}"
+export PKG_CONFIG_PATH="${CROSS_PREFIX}/opt/qt/lib/pkgconfig:${CROSS_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
 
 TARGET_ARCH="${CROSS_HOST%%-*}"
 TARGET_HOST="${CROSS_HOST#*-}"
@@ -51,10 +43,23 @@ case "${TARGET_HOST}" in
   ;;
 esac
 
-export PATH="${CROSS_ROOT}/bin:${PATH}"
-export CROSS_PREFIX="${CROSS_ROOT}/${CROSS_HOST}"
-export PKG_CONFIG_PATH="${CROSS_PREFIX}/opt/qt/lib/pkgconfig:${CROSS_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}"
-SELF_DIR="$(dirname "$(readlink -f "${0}")")"
+
+if [[ "$BUILDOP" == "prerequisite" ]]; then
+
+apk add gcc \
+  g++ \
+  make \
+  file \
+  perl \
+  autoconf \
+  automake \
+  libtool \
+  tar \
+  jq \
+  pkgconfig \
+  linux-headers \
+  zip \
+  xz
 
 mkdir -p "${CROSS_ROOT}" \
   /usr/src/zlib \
@@ -64,6 +69,7 @@ mkdir -p "${CROSS_ROOT}" \
   /usr/src/libtorrent \
   /usr/src/qtbase \
   /usr/src/qttools
+
 
 # toolchain
 if [ ! -f "${SELF_DIR}/${CROSS_HOST}-cross.tgz" ]; then
@@ -80,6 +86,12 @@ if [ "${TARGET_HOST}" = 'win' ]; then
   cp -fv /usr/src/mingw-std-threads/*.h "${CROSS_PREFIX}/include"
 fi
 
+fi # [[ "$BUILDOP" == "prerequisite" ]]
+
+
+
+if [[ "$BUILDOP" == "dependency_build" ]]; then
+
 # zlib
 if [ ! -f "${SELF_DIR}/zlib.tar.gz" ]; then
   zlib_latest_url="$(wget -qO- https://api.github.com/repos/madler/zlib/tags | jq -r '.[0].tarball_url')"
@@ -88,6 +100,7 @@ fi
 tar -zxf "${SELF_DIR}/zlib.tar.gz" --strip-components=1 -C /usr/src/zlib
 cd /usr/src/zlib
 if [ "${TARGET_HOST}" = win ]; then
+  make -f win32/Makefile.gcc BINARY_PATH="${CROSS_PREFIX}/bin" INCLUDE_PATH="${CROSS_PREFIX}/include" LIBRARY_PATH="${CROSS_PREFIX}/lib" SHARED_MODE=0 PREFIX="${CROSS_HOST}-" -j$(nproc)
   make -f win32/Makefile.gcc BINARY_PATH="${CROSS_PREFIX}/bin" INCLUDE_PATH="${CROSS_PREFIX}/include" LIBRARY_PATH="${CROSS_PREFIX}/lib" SHARED_MODE=0 PREFIX="${CROSS_HOST}-" -j$(nproc) install
 else
   CHOST="${CROSS_HOST}" ./configure --prefix="${CROSS_PREFIX}" --static
@@ -117,6 +130,7 @@ tar -jxf "${SELF_DIR}/boost.tar.bz2" --strip-components=1 -C /usr/src/boost
 cd /usr/src/boost
 ./bootstrap.sh
 sed -i "s/using gcc.*/using gcc : cross : ${CROSS_HOST}-g++ ;/" project-config.jam
+./b2 --prefix="${CROSS_PREFIX}" --with-system toolset=gcc-cross variant=release link=static runtime-link=static
 ./b2 install --prefix="${CROSS_PREFIX}" --with-system toolset=gcc-cross variant=release link=static runtime-link=static
 
 # qt
@@ -202,6 +216,56 @@ make -j$(nproc)
 make install
 unset LIBS CPPFLAGS
 
+fi # [[ "$BUILDOP" == "dependency_build" ]]
+
+if [[ "$BUILDOP" == "dependency_restore" ]]; then
+
+# zlib
+cd /usr/src/zlib
+if [ "${TARGET_HOST}" = win ]; then
+  make -f win32/Makefile.gcc BINARY_PATH="${CROSS_PREFIX}/bin" INCLUDE_PATH="${CROSS_PREFIX}/include" LIBRARY_PATH="${CROSS_PREFIX}/lib" SHARED_MODE=0 PREFIX="${CROSS_HOST}-" -j$(nproc) install
+else
+  make install
+fi
+
+# openssl
+cd /usr/src/openssl
+make install_sw
+
+# boost
+cd /usr/src/boost
+./b2 install --prefix="${CROSS_PREFIX}" --with-system toolset=gcc-cross variant=release link=static runtime-link=static
+
+# qt
+cd /usr/src/qtbase
+if [ "${TARGET_HOST}" = 'win' ]; then
+  export OPENSSL_LIBS="-lssl -lcrypto -lcrypt32 -lws2_32"
+fi
+make install
+cd /usr/src/qttools
+make -j$(nproc) install
+cd "${CROSS_ROOT}/bin"
+ln -sf lrelease "lrelease-qt${qt_ver:1:1}"
+
+# libiconv
+cd /usr/src/libiconv/
+make install
+
+# libtorrent
+cd /usr/src/libtorrent
+if [ "${TARGET_HOST}" = 'win' ]; then
+  export LIBS="-lcrypt32 -lws2_32"
+  # musl.cc x86_64-w64-mingw32 toolchain not supports thread local
+  export CPPFLAGS='-D_WIN32_WINNT=0x0602 -DBOOST_NO_CXX11_THREAD_LOCAL'
+fi
+make install
+unset LIBS CPPFLAGS
+
+fi # [[ "$BUILDOP" == "dependency_restore" ]]
+
+
+if [[ "$BUILDOP" == "build" ]]; then
+
 # build qbittorrent
 cd "${SELF_DIR}/../../"
 if [ "${TARGET_HOST}" = 'win' ]; then
@@ -228,3 +292,5 @@ fi
 
 # archive qbittorrent
 zip -j9v "${SELF_DIR}/qbittorrent-nox_${CROSS_HOST}_static.zip" /tmp/qbittorrent-nox*
+
+fi # [[ "$BUILDOP" == "build" ]]

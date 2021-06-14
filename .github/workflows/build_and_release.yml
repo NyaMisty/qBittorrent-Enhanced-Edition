@@ -73,13 +73,45 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+      - name: prepare OS prerequisite
+        env:
+          CROSS_HOST: "${{ matrix.cross_host }}"
+          OPENSSL_COMPILER: "${{ matrix.openssl_compiler }}"
+          QT_DEVICE: "${{ matrix.qt_device }}"
+          QT_XPLATFORM: "${{matrix.qt_xplatform}}"
+        run: .github/workflows/cross_build.sh prerequisite
+      - uses: actions/cache@v1
+        id: cache
+        with:
+          path: /usr/src
+          key: ${{ matrix.cross_host }}-${{ matrix.openssl_compiler }}-${{ matrix.qt_device }}-${{ matrix.qt_xplatform }}-usrsrc
+          #${{ hashFiles('**/lockfiles')}}
+      
+      - name: build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          CROSS_HOST: "${{ matrix.cross_host }}"
+          OPENSSL_COMPILER: "${{ matrix.openssl_compiler }}"
+          QT_DEVICE: "${{ matrix.qt_device }}"
+          QT_XPLATFORM: "${{matrix.qt_xplatform}}"
+        run: .github/workflows/cross_build.sh dependency_build
+
+      - name: restore dependencies
+        if: steps.cache.outputs.cache-hit == 'true'
+        env:
+          CROSS_HOST: "${{ matrix.cross_host }}"
+          OPENSSL_COMPILER: "${{ matrix.openssl_compiler }}"
+          QT_DEVICE: "${{ matrix.qt_device }}"
+          QT_XPLATFORM: "${{matrix.qt_xplatform}}"
+        run: .github/workflows/cross_build.sh dependency_restore
+      
       - name: cross compile nox-static
         env:
           CROSS_HOST: "${{ matrix.cross_host }}"
           OPENSSL_COMPILER: "${{ matrix.openssl_compiler }}"
           QT_DEVICE: "${{ matrix.qt_device }}"
           QT_XPLATFORM: "${{matrix.qt_xplatform}}"
-        run: .github/workflows/cross_build.sh
+        run: .github/workflows/cross_build.sh build
       - uses: actions/upload-artifact@v2
         with:
           name: qbittorrent-nox_${{ matrix.cross_host }}_static
