@@ -2320,6 +2320,7 @@ bool Session::loadTorrent(LoadTorrentParams params)
     // Limits
     p.max_connections = maxConnectionsPerTorrent();
     p.max_uploads = maxUploadsPerTorrent();
+    p.have_pieces.clear();
 
     const bool hasMetadata = (p.ti && p.ti->is_valid());
 #if (LIBTORRENT_VERSION_NUM >= 20000)

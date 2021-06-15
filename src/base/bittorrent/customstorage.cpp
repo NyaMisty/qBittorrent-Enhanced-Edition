@@ -39,7 +39,14 @@
 #include "common.h"
 #include <libtorrent/aux_/path.hpp>
 #include <libtorrent/operations.hpp>
+#include <libtorrent/aux_/storage_utils.hpp>
 
+// delete the files belonging to the torrent from disk.
+		// including the part-file, if there is one
+static constexpr lt::remove_flags_t remove_flags_delete_files = lt::bit_t{static_cast<int>(0)};
+
+// delete just the part-file associated with this torrent
+static constexpr lt::remove_flags_t remove_flags_delete_partfile = lt::bit_t{static_cast<int>(1)};
 
 
 CustomStorage::CustomStorage(lt::storage_params const& params, lt::file_pool& pool) : lt::storage_interface(params.files), m_pool(pool) {
@@ -66,8 +73,10 @@ void CustomStorage::initialize(lt::storage_error& ec) {
 	m_onefile.set_num_pieces(files().num_pieces());
 	m_onefile.set_name(files().name());
 	m_onefile.add_file(files().name(), files().total_size());
+	delete_files(remove_flags_delete_partfile, ec);
+	
 	lt::error_code e;
-	m_fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | lt::open_mode::random_access, e);
+	m_fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse, e);
 	if (e) {
 		ec.ec = e;
 		ec.file(lt::file_index_t{0});
@@ -83,10 +92,9 @@ void CustomStorage::release_files(lt::storage_error&) {
 	lt::file_handle defer_delete = std::move(m_fh);
 	m_pool.release(storage_index());
 }
-void CustomStorage::delete_files(lt::remove_flags_t, lt::storage_error&) {
-	LogMsg(QString("Released file handle"), Log::INFO);
-	lt::file_handle defer_delete = std::move(m_fh);
-	m_pool.release(storage_index());
+void CustomStorage::delete_files(lt::remove_flags_t flags, lt::storage_error& ec) {
+	release_files(ec);
+	lt::aux::delete_files(m_onefile, m_save_path, m_onefile.name(), remove_flags_delete_partfile, ec);
 }
 
 int CustomStorage::readv(lt::span<lt::iovec_t const> bufs, lt::piece_index_t piece
@@ -120,23 +128,46 @@ int CustomStorage::writev(lt::span<lt::iovec_t const> bufs
 	// 	ret += int(b.size());
 	// }
 	// return ret;
-	lt::error_code e;
-	lt::file_handle fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | lt::open_mode::random_access, e);
-	if (e) {
-		ec.ec = e;
-		ec.file(lt::file_index_t{0});
-		ec.operation = lt::operation_t::file_open;
-		return -1;
+	lt::file_handle fh;
+	{
+		lt::error_code e;
+		fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse | (flags & lt::open_mode::coalesce_buffers), e);
+		if (e) {
+			ec.ec = e;
+			ec.file(lt::file_index_t{0});
+			ec.operation = lt::operation_t::file_open;
+			return -1;
+		}
 	}
-	size_t pieceoff = files().piece_length() * int(piece);
-	int ret = int(fh->writev(pieceoff + offset, bufs, e, flags));
-	if (e) {
-		ec.ec = e;
-		ec.file(lt::file_index_t{0});
+	{
+		lt::error_code e;
+		std::int64_t pieceoff = std::int64_t(files().piece_length()) * int(piece);
+		std::int64_t targetoff = pieceoff + offset;
+		// LogMsg(QString("Writing piece %1 offset %2, finaloff %3")
+		// 		.arg(std::to_string(int(piece)).c_str())
+		// 		.arg(std::to_string(offset).c_str())
+		// 		.arg(std::to_string(targetoff).c_str())
+		// 		, Log::INFO);
+
+		int const ret = int(fh->writev(targetoff, bufs, e, flags));
+
+		// set this unconditionally in case the upper layer would like to treat
+		// short reads as errors
 		ec.operation = lt::operation_t::file_write;
-		return -1;
+
+		// we either get an error or 0 or more bytes read
+		TORRENT_ASSERT(e || ret >= 0);
+		TORRENT_ASSERT(ret <= bufs_size(vec));
+
+		if (e)
+		{
+			ec.ec = e;
+			ec.file(lt::file_index_t{0});
+			return -1;
+		}
+
+		return ret;
 	}
-	return ret;
 }
 
 lt::storage_interface *customStorageConstructor(const lt::storage_params &params, lt::file_pool &pool)
