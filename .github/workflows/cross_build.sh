@@ -258,6 +258,7 @@ if [ "${TARGET_HOST}" = 'win' ]; then
   # musl.cc x86_64-w64-mingw32 toolchain not supports thread local
   export CPPFLAGS='-D_WIN32_WINNT=0x0602 -DBOOST_NO_CXX11_THREAD_LOCAL'
 fi
+make -j$(nproc)
 make install
 unset LIBS CPPFLAGS
 
