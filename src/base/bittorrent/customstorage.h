@@ -42,7 +42,7 @@
 
 lt::storage_interface *customStorageConstructor(const lt::storage_params &params, lt::file_pool &pool);
 
-class CustomStorage final : public lt::storage_interface
+class CustomStorage : public lt::storage_interface
 {
 public:
     explicit CustomStorage(lt::storage_params const& params, lt::file_pool& pool);
@@ -68,6 +68,8 @@ public:
     int writev(lt::span<lt::iovec_t const> bufs
         , lt::piece_index_t const piece, int offset, lt::open_mode_t, lt::storage_error&) override;
 
+    void _release_files(bool force, lt::storage_error&);
+    void _persist_handle(lt::storage_error& ec);
 private:
     std::string m_save_path;
     lt::file_pool& m_pool;

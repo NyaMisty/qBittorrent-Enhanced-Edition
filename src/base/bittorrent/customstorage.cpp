@@ -38,6 +38,7 @@
 #include "base/logger.h"
 #include "common.h"
 #include <libtorrent/aux_/path.hpp>
+#include <libtorrent/torrent.hpp>
 #include <libtorrent/operations.hpp>
 #include <libtorrent/aux_/storage_utils.hpp>
 
@@ -48,6 +49,38 @@ static constexpr lt::remove_flags_t remove_flags_delete_files = lt::bit_t{static
 // delete just the part-file associated with this torrent
 static constexpr lt::remove_flags_t remove_flags_delete_partfile = lt::bit_t{static_cast<int>(1)};
 
+
+namespace robber {
+	template<typename Tag>
+	struct result {
+	/* export it ... */
+	typedef typename Tag::type type;
+	static type ptr;
+	};
+
+	template<typename Tag>
+	typename result<Tag>::type result<Tag>::ptr;
+
+	template<typename Tag, typename Tag::type p>
+	struct rob : result<Tag> {
+	/* fill it ... */
+	struct filler {
+		filler() { result<Tag>::ptr = p; }
+	};
+	static filler filler_obj;
+	};
+
+	template<typename Tag, typename Tag::type p>
+	typename rob<Tag, p>::filler rob<Tag, p>::filler_obj;
+
+	struct MtorrentGetter { typedef std::shared_ptr<void> lt::storage_interface::*type; };
+	template class rob<MtorrentGetter, &CustomStorage::m_torrent>;
+
+	std::shared_ptr<void> &get_mtorrent(CustomStorage &s) {
+		return s.*result<MtorrentGetter>::ptr;
+	}
+
+}
 
 CustomStorage::CustomStorage(lt::storage_params const& params, lt::file_pool& pool) : lt::storage_interface(params.files), m_pool(pool) {
 	m_save_path = lt::complete(params.path);
@@ -63,18 +96,10 @@ CustomStorage::~CustomStorage()
 	m_pool.release(storage_index());
 }
 
-void CustomStorage::initialize(lt::storage_error& ec) {
-	LogMsg(QString("Initialized custom storage, piecelen %1, piecenum %2, totalsize %3.")
-		.arg(std::to_string(files().piece_length()).c_str())
-		.arg(std::to_string(files().num_pieces()).c_str())
-		.arg(std::to_string(files().total_size()).c_str())
-		, Log::INFO);
-	m_onefile.set_piece_length(files().piece_length());
-	m_onefile.set_num_pieces(files().num_pieces());
-	m_onefile.set_name(files().name());
-	m_onefile.add_file(files().name(), files().total_size());
-	delete_files(remove_flags_delete_partfile, ec);
-	
+void CustomStorage::_persist_handle(lt::storage_error& ec) {
+	if (m_fh) {
+		return;
+	}
 	lt::error_code e;
 	m_fh = m_pool.open_file(storage_index(), m_save_path, lt::file_index_t{0}, m_onefile, lt::open_mode::read_write | lt::open_mode::sparse, e);
 	if (e) {
@@ -86,14 +111,48 @@ void CustomStorage::initialize(lt::storage_error& ec) {
 	LogMsg(QString("Successfully opened file handle"), Log::INFO);
 }
 
-void CustomStorage::release_files(lt::storage_error&) {
+void CustomStorage::initialize(lt::storage_error& ec) {
+	LogMsg(QString("Initialized custom storage, piecelen %1, piecenum %2, totalsize %3.")
+		.arg(std::to_string(files().piece_length()).c_str())
+		.arg(std::to_string(files().num_pieces()).c_str())
+		.arg(std::to_string(files().total_size()).c_str())
+		, Log::INFO);
+	m_onefile.set_piece_length(files().piece_length());
+	m_onefile.set_num_pieces(files().num_pieces());
+	m_onefile.set_name(files().name());
+	m_onefile.add_file(files().name(), files().total_size());
+	delete_files(remove_flags_delete_partfile, ec);
+}
+
+void CustomStorage::_release_files(bool force, lt::storage_error&) {
+	LogMsg(QString("_release_file called! forced = %1").arg(std::to_string(force).c_str()), Log::INFO);
+	bool needRelease = false;
+	if (force) {
+		needRelease = true;
+	} else {
+		void *_m_torrent = robber::get_mtorrent(*this).get();
+		if (_m_torrent) {
+			lt::torrent *__torrent = (lt::torrent *)_m_torrent;
+			if (__torrent->is_finished()) {
+				LogMsg(QString("%1 finished!").arg(m_onefile.name().c_str()), Log::INFO);
+				needRelease = true;
+			}
+		} else {
+		}
+	}
+	if (needRelease) {
+		LogMsg(QString("%1 released!").arg(m_onefile.name().c_str()), Log::INFO);
+		lt::file_handle defer_delete = std::move(m_fh);
+		m_pool.release(storage_index());
+	}
+}
+
+void CustomStorage::release_files(lt::storage_error &ec) {
 	// make sure we don't have the files open
-	LogMsg(QString("Released file handle"), Log::INFO);
-	lt::file_handle defer_delete = std::move(m_fh);
-	m_pool.release(storage_index());
+	_release_files(false, ec);
 }
 void CustomStorage::delete_files(lt::remove_flags_t flags, lt::storage_error& ec) {
-	release_files(ec);
+	_release_files(true, ec);
 	lt::aux::delete_files(m_onefile, m_save_path, m_onefile.name(), remove_flags_delete_partfile, ec);
 }
 
@@ -119,6 +178,7 @@ int CustomStorage::readv(lt::span<lt::iovec_t const> bufs, lt::piece_index_t pie
 int CustomStorage::writev(lt::span<lt::iovec_t const> bufs
 	, lt::piece_index_t const piece, int offset, lt::open_mode_t flags, lt::storage_error& ec)
 {
+	_persist_handle(ec);
 	// auto& data = m_file_data[piece];
 	// int ret = 0;
 	// for (auto& b : bufs) {
