@@ -108,7 +108,7 @@ void CustomStorage::_persist_handle(lt::storage_error& ec) {
 		ec.operation = lt::operation_t::file;
 		return;
 	}
-	LogMsg(QString("Successfully opened file handle"), Log::INFO);
+	LogMsg(QString("%1: Successfully opened file handle!").arg(m_onefile.name().c_str()), Log::INFO);
 }
 
 void CustomStorage::initialize(lt::storage_error& ec) {
@@ -134,14 +134,14 @@ void CustomStorage::_release_files(bool force, lt::storage_error&) {
 		if (_m_torrent) {
 			lt::torrent *__torrent = (lt::torrent *)_m_torrent;
 			if (__torrent->is_finished()) {
-				LogMsg(QString("%1 finished!").arg(m_onefile.name().c_str()), Log::INFO);
+				LogMsg(QString("%1: release because finished!").arg(m_onefile.name().c_str()), Log::INFO);
 				needRelease = true;
 			}
 		} else {
 		}
 	}
 	if (needRelease) {
-		LogMsg(QString("%1 released!").arg(m_onefile.name().c_str()), Log::INFO);
+		LogMsg(QString("%1: released!").arg(m_onefile.name().c_str()), Log::INFO);
 		lt::file_handle defer_delete = std::move(m_fh);
 		m_pool.release(storage_index());
 	}
